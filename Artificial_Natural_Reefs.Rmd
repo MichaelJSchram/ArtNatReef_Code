@@ -1,0 +1,1950 @@
+---
+title: "Dissertation - Chapter 1"
+author: "M.Schram"
+date: "04/25/2024"
+editor_options: 
+  chunk_output_type: console
+---
+
+# Data import
+
+This code chunk specifically imports the data from the 8 original sites,
+performs preliminary filtering, and assigns common variable values (e.g.,
+artificial vs. natural, deep vs. shallow)
+
+It also assigns variable values used repeatedly throughout analyses, such as
+number of iterations for permutational significance testing.
+
+2023-07-19: A VERY IMPORTANT NOTE!!! All analyses in the manuscript and PRIMER
+were based on data PRIOR to the inclusion of ANY 2023 survey data.
+
+```{r Data Import}
+source("DataImport.R")
+source("shadeplot.R")
+
+library(openxlsx)
+# library(lmerTest)
+library(emmeans)
+# For tabularized mixed-effects model outputs
+library(sjPlot)
+
+# Values for permutational analyses or and subsequent plots
+n.iter  <- 9999
+m.max   <- 60
+n.spec  <- 16 # ~10% of the total number of taxa in these data
+
+
+# Plot color & size default
+S_Art <- "darkgreen"
+S_Nat <- "darkorange4"
+D_Art <- "darkblue"
+D_Nat <- "brown3"
+
+# Scaling for AFS presentation (2021-10-16)
+Plt_H     <- 4  
+Plt_W     <- Plt_H*(7.5/3)
+
+# Scaling for publication draft combo plots (2023-03-29)
+CombPlt_H <- 7*1.25
+CombPlt_W <- 6.5*1.25
+
+# Scaling for ICES JMS author guidelines (in mm; 2024-02-08)
+SglColPlt_H <- 85
+SglColPlt_W <- 85
+
+DblColPlt_H <- 170
+DblColPlt_W <- 170
+
+# Export format for gg_save calls
+file_type  <- ".pdf"
+
+# Manuscript based on 2013-2022 data. The following code limits the data used to
+# that timeframe
+Reefs <- 
+  filter(
+    Reefs,
+    Year %in% seq(2013,2022)
+  ) %>%
+  # Removes unused factor levels (e.g., Intermediate depth sites)
+  droplevels() %>%
+  # Adjusts previous factor levels, which included all 14 sites
+  mutate(
+    Proximity = recode(Proximity, Middle = "South")
+  )
+
+## Mean survey count per primary sampling unit (Site x Season x Year)
+Survey_Count <- 
+  select(
+    Reefs,
+    c(Site, Date, Survey_Count)
+  ) %>%
+  pivot_wider(
+    names_from = "Date",
+    values_from = "Survey_Count",
+    values_fill = 0
+  ) %>%
+  pivot_longer(
+    cols      = -"Site",
+    names_to  = "Date",
+    values_to = "Survey_Count"
+  ) %>%
+  summarize(
+    mu_Surv = round(mean(Survey_Count), 2),
+    se_Surv = round(sd(Survey_Count)/(sqrt(length(Survey_Count))), 2),
+    .by = c(Site)
+  ) %>%
+  slice(
+    match(
+      c("CWR", "21HS", "SPBR", "AC5", "PIN2", "CAVES", "TI2", "FFL"),
+      Site
+    )
+  )
+
+# Species curve parameters
+idx <- expand(Reefs, Distance, Proximity, Type)
+
+```
+
+# Non-AFS journal label correction
+```{r}
+# Correct common names to lowercase for non-AFS journal(s), and then correct
+# proper names
+Taxa_table$Common <- 
+  tolower(
+    Taxa_table$Common
+  ) %>%
+  str_replace(
+    "atlantic", 
+    "Atlantic"
+  ) %>%
+  str_replace(
+    "african",  
+    "African"
+  ) %>%
+  str_replace(
+    "bermuda",  
+    "Bermuda"
+  ) %>%
+  str_replace(
+    "florida",  
+    "Florida"
+  ) %>%
+  str_replace(
+    "nassau", 
+    "Nassau"
+  ) %>%
+  str_replace(
+    "seminole", 
+    "Seminole"
+  ) %>%
+  str_replace(
+    "spanish",
+    "Spanish"
+  )
+```
+
+# Univariate Analyse
+## Richness by reef type
+
+```{r Richness by reef type}
+## Pulls in density data, and summarizes taxon densities into Presence/Absence
+Reefs_SR <- 
+  bind_rows(
+    filter(
+      Reefs, 
+      Distance == "Shallow"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on SHALLOW sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    ),
+    filter(
+      Reefs, 
+      Distance == "Deep"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on SHALLOW sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    )
+  ) %>%
+  mutate(
+    Richness    = rowSums(select(., -c(Year:Type)) != 0, na.rm = TRUE),
+    Richness_m2 = Richness/Survey_Area,
+    .after      = Type
+  ) %>%
+  mutate(
+    Distance = fct_relevel(Distance, c("Shallow", "Deep")),
+  )
+
+# For unfiltered richness... (2024-02-05)
+# Reefs_SR <- 
+#   Reefs %>%
+#   mutate(
+#     Richness    = rowSums(select(., -c(Year:Type)) != 0, na.rm = TRUE),
+#     Richness_m2 = Richness/Survey_Area,
+#     .after      = Type
+#   )
+
+
+car::qqPlot(Reefs_SR$Richness)
+shapiro.test(Reefs_SR$Richness)
+
+Richness_ANOVA <- 
+  lmerTest::lmer(
+    Richness ~ Type * Distance * (1|Year) * (1|Season), 
+    Reefs_SR
+  )
+
+summary(Richness_ANOVA)
+
+(Richness_ANOVA_means <- 
+  emmeans(Richness_ANOVA,
+       pairwise ~ Type * Distance)
+)
+
+tab_model(Richness_ANOVA)
+
+Reefs_SR_Summary <- 
+  summarize(
+    Reefs_SR,
+    Richness_mu      = mean(Richness),
+    Richness_se      = sd(Richness)/(sqrt(length(Richness))),
+    Richness_95CI    = 1.96*(sd(Richness)/(sqrt(length(Richness)))),
+    Richness_m2_mu   = mean(Richness_m2),
+    Richness_m2_se   = sd(Richness_m2)/(sqrt(length(Richness_m2))),
+    Richness_m2_95CI = 1.96*(sd(Richness_m2)/(sqrt(length(Richness_m2)))),
+    .by = c(Type, Distance)
+  ) %>%
+  mutate(
+    Depth_Type = 
+      factor(
+        interaction(Distance, Type, sep = " "),
+        levels = c("Shallow Artificial","Shallow Natural",
+                   "Deep Artificial",   "Deep Natural")
+      ),
+    Distance = fct_relevel(Distance, c("Shallow", "Deep")),
+    .after = Distance
+  )
+
+```
+
+### Richness plot
+```{r}
+
+(Plot_SRMu <- 
+  ggplot(
+    Reefs_SR_Summary, 
+    aes(
+      x     = Depth_Type, 
+      y     = Richness_mu,
+      color = Depth_Type,
+      shape = Type)
+  )+
+  theme_classic()+
+  theme(
+    axis.title         = element_text(size = 32/.pt, face = "bold"), 
+    axis.text          = element_text(size = 24/.pt,),
+    strip.text         = element_text(size = 32/.pt, face = "bold"),
+    legend.text        = element_text(size = 28/.pt),
+    legend.title       = element_text(size = 28/.pt, face = "bold"),
+    legend.direction   = "vertical",
+    legend.position    = c(0.2, 0.85),
+    legend.title.align = 0.5,
+    # legend.spacing.y   = unit(1/.pt, "pt"),
+    axis.ticks.x       = element_blank(),
+    axis.text.x        = element_blank(),
+    strip.background   = element_blank(),
+    strip.text.x       = element_blank(),
+    strip.placement    = "outside",
+    panel.spacing      = unit(0, "lines")
+  )+
+  labs(
+    x = "",
+    y = "Taxonomic richness",
+    color = expression(bold(underline("Reef type"))), 
+    shape = expression(bold(underline("Reef type")))
+  )+
+  geom_point(
+    size = 12/.pt
+  )+
+  geom_linerange(
+    aes(
+      ymin = (Richness_mu - Richness_95CI),
+      ymax = (Richness_mu + Richness_95CI)
+    ),
+    linewidth   = 3/.pt,
+    show.legend = FALSE
+  )+
+  scale_y_continuous(
+    labels = label_number(accuracy = 1),
+    breaks = seq(13, 27, by = 2)
+  )+
+  scale_color_manual(
+    values = c(S_Art, S_Nat, D_Art, D_Nat)
+  )+
+  scale_fill_manual(
+    values = c(S_Art, S_Nat, D_Art, D_Nat)
+  )+
+  scale_shape_manual(
+    values = c(17,15)
+  )+
+  facet_wrap(
+    ~Distance, 
+    strip.position = "bottom", 
+    scales         = "free_x"
+  )+
+  guides(
+    color = "none",
+    shape = guide_legend(keyheight = 0.35)
+  )
+)
+
+
+```
+
+## Density by reef type
+
+```{r Density by reef type}
+## Pulls in density data, and sums across taxon densities
+Reefs_Dens <- 
+    bind_rows(
+    filter(
+      Reefs, 
+      Distance == "Shallow"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on SHALLOW sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    ),
+    filter(
+      Reefs, 
+      Distance == "Deep"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on SHALLOW sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    )
+  ) %>%
+  mutate(
+    Density = (rowSums(select(., -c(Year:Type)), na.rm = TRUE))^(1/4),
+    .after  = Type
+  )
+
+car::qqPlot(Reefs_Dens$Density)
+shapiro.test(Reefs_Dens$Density)
+
+Density_ANOVA <- 
+  lmerTest::lmer(
+    Density ~ Type * Distance * (1|Year) * (1|Season), 
+    Reefs_Dens
+  )
+
+summary(Density_ANOVA)
+
+(Density_ANOVA_means <- 
+  emmeans(Density_ANOVA,
+       pairwise ~ Type * Distance)
+)
+
+tab_model(Density_ANOVA)
+
+Reefs_Dens_Summary <-
+  summarize(
+    Reefs_Dens,
+    Density_mu   = mean(Density),
+    Density_se   = sd(Density)/sqrt(length(Density)),
+    Density_95CI = 1.96*(sd(Density)/sqrt(length(Density))),
+    .by = c(Type, Distance)
+  ) %>%
+  mutate(
+    Depth_Type =
+      factor(
+        interaction(Distance, Type, sep = " "),
+        levels = c("Shallow Artificial","Shallow Natural",
+                   "Deep Artificial",   "Deep Natural")
+      ),
+    Distance = fct_relevel(Distance, c("Shallow", "Deep")),
+    .after = Distance
+  )
+
+
+
+```
+
+### Density plot
+```{r}
+(Plot_DensMu <- 
+  ggplot(
+    Reefs_Dens_Summary, 
+    aes(
+      x     = Depth_Type, 
+      y     = Density_mu,
+      color = Depth_Type,
+      shape = Type
+    )
+  )+
+  theme_classic()+
+  theme(
+    axis.title       = element_text(size = 32/.pt, face = "bold", lineheight = 0.1), 
+    axis.text        = element_text(size = 22/.pt),
+    strip.text       = element_text(size = 32/.pt, face = "bold"),
+    legend.text      = element_text(size = 28/.pt),
+    legend.title     = element_text(size = 28/.pt, face = "bold"),
+    legend.position  = "none",
+    axis.ticks.x     = element_blank(),
+    axis.text.x      = element_blank(),
+    strip.background = element_blank(),
+    strip.placement  = "outside",
+    panel.spacing    = unit(0, "lines")
+  )+
+  labs(
+    x = "",
+    y = 
+      expression(
+        bold(
+          atop(
+            "Fish density (no./"*m^bold("2")*")",
+            "(fourth root transformed)"
+          )
+        )
+      ),
+    fill  = "Type:",
+    color = "Type:", 
+    shape = "Type:",
+  )+
+  geom_point(
+    size = 12/.pt
+  )+
+  geom_pointrange(
+    aes(
+      ymin = (Density_mu - Density_95CI),
+      ymax = (Density_mu + Density_95CI)
+    ),
+    linewidth   = 3/.pt,
+    show.legend = FALSE
+  )+
+  scale_color_manual(
+    values = c(S_Art, S_Nat, D_Art, D_Nat)
+  )+
+  scale_shape_manual(
+    values = c(17,15)
+  )+
+  scale_x_discrete(
+    labels = c("","","","")
+  )+
+  facet_wrap(
+    ~Distance, 
+    strip.position = "bottom", 
+    scales         = "free_x"
+  )+
+  guides(
+    color = "none"
+  )
+)
+```
+
+### Univarite multipanel plot
+
+```{r}
+Plot_SRMu_dims    <- get_dim(Plot_SRMu)
+Plot_DensMu_align <- set_dim(Plot_DensMu, Plot_SRMu_dims)
+
+(Plot_Bi <- 
+  Plot_SRMu / Plot_DensMu +
+  plot_layout(
+    axis_titles = "collect"
+  ) +
+  plot_annotation(
+    tag_levels = "a",
+    tag_suffix = ")"
+  ) & 
+  theme(
+    plot.tag.position = c(0.02, 1),
+    plot.tag          = element_text(size = 28/.pt, face = "bold")
+  )
+)
+```
+
+# Multivariate Analyses
+
+## Data pretreatment
+
+```{r Multivariate Analyses Data Pretreatment}
+## Establish density data for ALL sites
+Dens_Env.All <- 
+  select(
+    Reefs, 
+    Year:Type
+  )
+
+Dens_Biot.All <- 
+  select(
+    Reefs, 
+    -c(Year:Type)
+  )
+
+  ## Establish density data for SHALLOW sites
+  Dens_In <- 
+    filter(
+      Reefs, 
+      Distance == "Shallow"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on SHALLOW sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    )
+  
+  Dens_Env.In <- 
+    select(
+      Dens_In, 
+      Year:Type)
+  
+  Dens_Biot.In <- 
+    select(
+      Dens_In, 
+      -c(Year:Type))
+  
+  ## Establish density data for DEEP sites
+  Dens_Off <- 
+    filter(
+      Reefs, 
+      Distance == "Deep"
+    ) %>%
+    # Remove any taxa not present in at least 5% of observations on DEEP sites
+    select(
+      which(
+        colSums(. != 0)/nrow(.) > 0.05
+      )
+    )
+  
+  Dens_Env.Off <- 
+    select(
+      Dens_Off, 
+      Year:Type)
+  
+  Dens_Biot.Off <- 
+    select(
+      Dens_Off, 
+      -c(Year:Type))
+
+  
+Species_UniqNo <- 
+  bind_rows(
+    Dens_Biot.In, 
+    Dens_Biot.Off
+  ) %>%
+  select(
+    order(
+      colnames(
+        .
+      )
+    )
+  ) %>%
+  colnames(
+    .
+  ) %>%
+  data.frame(
+    SpCode = .
+  ) %>%
+  merge(
+    select(
+      Taxa_table,
+      c(SpCode, SpName, Common, Family)
+    )
+  ) %>%
+  arrange(
+    Family,
+    SpName
+  ) %>%
+  mutate(
+   Shallow = ifelse(SpCode %in% names(Dens_Biot.In), 1, 0),
+   Deep    = ifelse(SpCode %in% names(Dens_Biot.Off), 1, 0),
+   Number  = as.character(1:nrow(.))
+  ) %>%
+  relocate(
+    Number,
+    Family,
+    .before = SpName
+  )
+
+
+# write.csv(Species_UniqNo, "Species_UniqNo.csv")
+
+## Visually assess data transformations
+(Transformation_plot <- 
+  shadeplot(
+    bind_rows(
+      Dens_Biot.In,
+      Dens_Biot.Off
+    ) %>%
+    replace(is.na(.), 0) %>%
+    select(
+      order(
+        colnames(
+          .
+        )
+      )
+    ) %>%
+    rename_with(
+      ~deframe(select(Species_UniqNo, c(SpCode, Number)))[.x],
+      .cols = Species_UniqNo$SpCode
+    ) %>%
+    select(
+      order(
+        as.numeric(
+          gsub(
+            "[^0-999]",
+            "", 
+            names(.)
+          )
+        )
+      )
+    )
+  )
+) 
+
+  # Fourth-root transformation to downweigh highly abundant taxa
+  Dens_Biot.In.BC   <- vegdist(Dens_Biot.In^(1/4))
+  Dens_Biot.Off.BC   <- vegdist(Dens_Biot.Off^(1/4))
+  
+  # Square-root Bray-Curtis dissim to remove negative eigenvalues from PCoA
+  Dens_Biot.In.BCsq <- sqrt(Dens_Biot.In.BC)
+  Dens_Biot.Off.BCsq <- sqrt(Dens_Biot.Off.BC) 
+  
+### Community-weighted mean functional trait data pre-treatment
+## Establishes list of Trait data
+# Extracts SpCodes, ensures they're in alphabetical order
+SpCodes.All <- 
+  sort(
+    colnames(Dens_Biot.All)
+  )
+
+SpCodes.In  <- 
+  sort(
+    colnames(Dens_Biot.In)
+  )
+
+SpCodes.Off <- 
+  sort(
+    colnames(Dens_Biot.Off)
+  )
+
+# Compiles trait data for taxa found on ALL sites
+Traits.All <- 
+  arrange(
+    Taxa_table, 
+    SpCode
+  ) %>%
+  filter(
+    SpCode %in% SpCodes.All
+  ) %>%
+  select(
+    -c(SpCode:Class,
+       Coef_a,
+       Coef_b,
+       Trophic_Group,
+       Water_Column,
+       Feeding_Habit,
+       Diel_Activity,
+       Complexity,
+       Gregariousness, 
+       Distribution_Center)
+  ) %>%
+  relocate(
+    Caudal_Aspect_Ratio, 
+    .after = Trophic_Position
+  ) %>%
+  `row.names<-`(SpCodes.All)
+
+# Allocate predictors matrix
+TrtDens_Env.All <- 
+  Dens_Env.All
+
+# Allocated response variable: estimated CWM by density
+TrtDens_Biot.All <- 
+  functcomp(
+    x        = Traits.All, 
+    a        = as.matrix(Dens_Biot.All^(1/4)),
+    CWM.type = "all")
+
+# Scale only 'continuous' terms, leaving proportional descriptions from
+# categorical terms as is to retain 'descriptive correlations'
+TrtDens_Biot.All <- 
+  TrtDens_Biot.All %>%
+  mutate(
+    .before = "Lateral_Profile_Deep",
+    "Length[max]"         = `Max_Length`/max(`Max_Length`),
+    "Trophic position"    = `Trophic_Position`/max(`Trophic_Position`),
+    "Caudal Fin AR"       = `Caudal_Aspect_Ratio`/max(`Caudal_Aspect_Ratio`),
+    `Max_Length`          = NULL,
+    `Trophic_Position`    = NULL,
+    `Caudal_Aspect_Ratio` = NULL
+  )
+
+# Compiles trait data for taxa found on SHALLOW sites
+Traits.In <- 
+  filter(
+    Traits.All,
+    row.names(Traits.All) %in% SpCodes.In
+  ) %>%
+  droplevels()
+
+# Compiles trait data for taxa found on DEEP sites
+Traits.Off <- 
+  filter(
+    Traits.All,
+    row.names(Traits.All) %in% SpCodes.Off
+  ) %>%
+  droplevels()
+
+
+# Allocate predictors matrix
+TrtDens_Env.In  <- Dens_Env.In
+
+# Allocated response variable: estimated CWM by density
+TrtDens_Biot.In <- 
+  functcomp(
+    x        = Traits.In,
+    a        = as.matrix(Dens_Biot.In^(1/4)),
+    CWM.type = "all"
+  )
+
+# Converts extraneous naming from expanded dummy code columns
+names(TrtDens_Biot.In) <- sub("^Lateral_Profile_",     
+                              "LP: ",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("Eel.like",
+                              "Eel like",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Cross_Section_",       
+                              "CS: ",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Mouth_Position_",      
+                              "MP: ",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("Sub.terminal",
+                              "Sub-terminal",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Distribution_Center_", 
+                              "DC: ",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Substrate_Type_",      
+                              "ST: ",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("Soft.Bottom",      
+                              "Soft Bottom",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("Hard.Bottom",      
+                              "Hard Bottom",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Caudal_Aspect_Ratio",
+                              "Caudal Aspect Ratio",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("^Trophic_Position",
+                              "Trophic Position",
+                              names(TrtDens_Biot.In))
+names(TrtDens_Biot.In) <- sub("Subtropical.Tropical",
+                              "Subtropical/Tropical",
+                              names(TrtDens_Biot.In))
+
+# Proportionalizes 'continuous' terms, such that all terms have equivalent range
+TrtDens_Biot.In <-
+  mutate(
+    TrtDens_Biot.In, 
+    .before              = "LP: Deep",
+   "Length[max]"         = `Max_Length`/max(`Max_Length`),
+   "Trophic position"    = `Trophic Position`/max(`Trophic Position`),
+   "Caudal Fin AR"       = `Caudal Aspect Ratio`/max(`Caudal Aspect Ratio`),
+   `Max_Length`          = NULL,
+   `Trophic Position`    = NULL,
+   `Caudal Aspect Ratio` = NULL
+ )
+
+# Square-root removes negative eigenvalues, turning the distance matrix 'metric'
+TrtDens_Biot.In.BC <- 
+  sqrt(
+    vegdist(
+      TrtDens_Biot.In, 
+      'bray'
+    )
+  )
+
+
+# Allocate predictors matrix
+TrtDens_Env.Off <- 
+  Dens_Env.Off
+
+# Allocated response variable: estimated CWM by density
+TrtDens_Biot.Off <- 
+  functcomp(
+    x        = Traits.Off,
+    a        = as.matrix(Dens_Biot.Off^(1/4)),
+    CWM.type = "all"
+  )
+
+# Converts extraneous naming from expanded dummy code columns
+names(TrtDens_Biot.Off) <- sub("^Lateral_Profile_",     
+                              "LP: ",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("Eel.like",
+                              "Eel like",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Cross_Section_",       
+                              "CS: ",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Mouth_Position_",      
+                              "MP: ",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("Sub.terminal",
+                              "Sub-terminal",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Distribution_Center_", 
+                              "DC: ",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("Subtropical.Tropical",      
+                              "Subtropical/Tropical",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Substrate_Type_",      
+                              "ST: ",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("Soft.Bottom",      
+                              "Soft Bottom",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("Hard.Bottom",      
+                              "Hard Bottom",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Caudal_Aspect_Ratio",
+                              "Caudal Aspect Ratio",
+                              names(TrtDens_Biot.Off))
+names(TrtDens_Biot.Off) <- sub("^Trophic_Position",
+                              "Trophic Position",
+                              names(TrtDens_Biot.Off))
+
+# Scale only 'continuous' terms, leaving proportional descriptions from
+# categorical terms as is to retain 'descriptive correlations'
+TrtDens_Biot.Off <- 
+  TrtDens_Biot.Off %>%
+  mutate(
+    .before = "LP: Deep",
+    "Length[max]"         = `Max_Length`/max(`Max_Length`),
+    "Trophic position"    = `Trophic Position`/max(`Trophic Position`),
+    "Caudal Fin AR"       = `Caudal Aspect Ratio`/max(`Caudal Aspect Ratio`),
+    `Max_Length`          = NULL,
+    `Trophic Position`    = NULL,
+    `Caudal Aspect Ratio` = NULL)
+
+# Square-root removes negative eigenvalues, turning the distance matrix 'metric'
+TrtDens_Biot.Off.BC <- 
+  sqrt(
+    vegdist(
+      TrtDens_Biot.Off, 
+      'bray'
+    )
+  )
+
+
+```
+
+## Export for PRIMER analyses
+
+```{r}
+
+## Surveys have the same Identifying information across data types (e.g., reef
+## type, depth, year)
+write.xlsx(cbind(Number = 1:nrow(Dens_Env.All),
+                 select(Dens_Env.All, Year, Survey_Radius:Date),
+                 "BLANK" = NA, 
+                 select(Dens_Env.All, c(Year, Site, Season, Distance, Proximity, Type))), 
+           "PRIMER/Env_All.xlsx")
+
+# Time covariate
+## Survey date as recorded
+write.xlsx(cbind(Number = 1:nrow(Dens_Env.All),
+                 select(Dens_Env.All, J_Date), 
+                 "BLANK" = NA, 
+                 select(Dens_Env.All, c(Year, Site, Season, Distance, Proximity, Type))), 
+           "PRIMER/Year_Covariate.xlsx")
+
+# Biotic data
+## COMBINED taxa present in at least 5% of all surveys WITHIN DEPTHS
+write.xlsx(cbind(Number = 1:nrow(Dens_Env.All),
+                  (
+                    bind_rows(
+                      Dens_Biot.In,
+                      Dens_Biot.Off
+                    ) %>%
+                    replace(is.na(.), 0)
+                  ), 
+                 "BLANK" = NA, 
+                 select(Dens_Env.All, c(Year, Site, Season, Distance, Proximity, Type))),
+           "PRIMER/Dens_Biot_All5.xlsx")
+
+## SEPARATED taxa present in at least 5% of surveys WITHIN depths
+write.xlsx(cbind(Number = 1:nrow(Dens_In),
+                 select(Dens_In, -c(Year:Type)),
+                 "BLANK" = NA,
+                 select(Dens_In, c(Year, Site, Season, Distance, Proximity, Type))),
+           "PRIMER/Dens_Biot_Shall5.xlsx")
+
+write.xlsx(cbind(Number = 1:nrow(Dens_Off),
+                 select(Dens_Off, -c(Year:Type)),
+                 "BLANK" = NA,
+                 select(Dens_Off, c(Year, Site, Season, Distance, Proximity, Type))),
+           "PRIMER/Dens_Biot_Deep5.xlsx")
+
+
+# Trait data
+## Density-weighted
+write.xlsx(cbind(Number = 1:nrow(Dens_Env.All),
+                 TrtDens_Biot.All, 
+                 "BLANK" = NA, 
+                 select(Dens_Env.All, c(Year, Site, Season, Distance, Proximity, Type))), 
+           "PRIMER/TrtDens_Biot_All.xlsx")
+
+## Only taxa present in at least 5% of surveys WITHIN depths
+write.xlsx(cbind(Number = 1:nrow(TrtDens_Biot.In),
+                 TrtDens_Biot.In,
+                 "BLANK" = NA,
+                 select(Dens_In, c(Year, Site, Season, Distance, Proximity, Type))),
+           "PRIMER/TrtDens_Biot_Shall5.xlsx")
+
+write.xlsx(cbind(Number = 1:nrow(TrtDens_Biot.Off),
+                 TrtDens_Biot.Off,
+                 "BLANK" = NA,
+                 select(Dens_Off, c(Year, Site, Season, Distance, Proximity, Type))),
+           "PRIMER/TrtDens_Biot_Deep5.xlsx")
+
+```
+
+## CAP Ordination ggplot template
+
+```{r}
+## Base plot template for all CAP ordinations in this chapter
+
+Plot_Template <- function(Form, Site, Scores, PctVar, VarExp, Depth, Title){
+  # Form    = Type of CAP ordination to generate
+  #             "Comp" - Composition and abundance
+  #             "Trait" - Trait based analysis
+  #
+  # Site    = Object scores from CAPdiscrim() 
+  #     
+  #   Example: CAPdiscrim_result$x
+  #
+  # Scores  = Descriptor scores from add.spec.scores()
+  #             
+  #   Example: CAPdiscrim_result$cproj (the Species or Trait scores)
+  #
+  # PctVar  = Percent of the total variance explained by the axes used to 
+  #           describe the CAP model (e.g., 0.15 of the TOTAL VARIANCE)
+  #           
+  #   Example: sum(diag(CAPdiscrim_result$manova$SS$`y[, group]`))/CAPdiscrim_result$tot
+  #
+  # VarExp  = Percent of total variance explained by the CAP model that is 
+  #           explained by EACH CA. (e.g., 0.12 of the 0.15 of the TOTAL VARIANCE
+  #           from above) as captured by the cap_pctvars() function. 
+  #
+  #   Example: cap_pctvars(CAPdiscrim_result)
+  #
+  # Depth   = Binary toggle to dictate respective color scheme
+  #             "Shallow" - c(S_Art, S_Nat) 
+  #             "Deep"    - c(D_Art, D_Nat)
+  #          
+  # Title   = Character string to append into plot title.
+
+# Vector label font size
+lbl_size <- 8/.pt
+# Repulsion among vector labels
+lbl_frce <- 2.0
+# Attraction of vector label to point
+lbl_pull <- 0.1
+# Label placement limits
+lbl_xlim <- 0.05
+lbl_ylim <- 0.05
+# Label box padding
+lbl_pdng <- 0.15
+# Maximum allowable object overlaps (e.g., points label can cover)
+lbl_ovlp <- 15
+
+if (Form == "Comp") {
+  Scores <- 
+    rename(
+      Scores, 
+      Label = Number
+    )
+  parse_tgl <-  FALSE
+} else if (Form == "Trait") {
+  Scores <- 
+    rename(
+      Scores, 
+      Label = Trait
+    )
+  parse_tgl <-  TRUE
+} else{
+  stop("Plot rendering stopped. Form argument not correctly defined. 
+       Must be 'Composition' or 'Trait'")
+}
+
+ColorScheme <- if (Depth == "Shallow") { 
+  c(S_Art, S_Nat) 
+} else if (Depth == "Deep") {
+  c(D_Art, D_Nat)
+} else {
+  stop("Plot rendering stopped. Depth argument not correctly defined. 
+       Must be 'Shallow' or 'Deep'")
+}
+
+ggplot()+
+  theme_classic()+
+  theme(
+    axis.title       = element_text(size = 32/.pt, face = "bold"),
+    axis.text        = element_text(size = 22/.pt, face = "bold"),
+    legend.text      = element_text(size = 28/.pt, face = "bold"),
+    legend.title     = element_text(size = 32/.pt, face = "bold"),
+    legend.direction = "horizontal",
+    legend.position  = c(0.5, 1.0),
+    legend.margin    = margin(0,0,0,0, unit = "cm"),
+    plot.title       = element_text(size = 34/.pt)
+  )+
+  labs(
+    color = "Reef type:", 
+    shape = "Reef type:",
+    title = 
+      paste0(
+        Title,
+        " (",
+        format(round(PctVar,4)*100, nsmall = 2),
+        "%)"
+      ),
+    x = 
+      paste0(
+        "CA1 (variance explained: ",
+        round(VarExp[1], digits = 1),
+        "%)"
+      ),
+    y = 
+      paste0(
+        "Jittered axis"
+      )
+    )+
+  geom_hline(
+    yintercept = 0, 
+    linetype   = 'dashed', 
+    color      = 'darkgray'
+  )+
+  geom_vline(
+    xintercept = 0, 
+    linetype   = 'dashed', 
+    color      = 'darkgray'
+  )+
+  geom_point(
+    data  = Site,
+    aes(
+      x     = LD1, 
+      y     = LD2, 
+      color = Type, 
+      shape = Type
+    ),
+    size  = 10/.pt,
+    alpha = 0.65
+  )+
+  stat_ellipse(
+    data = Site,
+    aes(
+      x     = LD1, 
+      y     = LD2,
+      group = Type,
+      color = Type
+    ),
+    linewidth   = 3/.pt, 
+    level       = 0.90,
+    alpha       = 0.65,
+    show.legend = FALSE)+
+  geom_segment(
+    data = Scores,
+    aes(
+      x    = 0,
+      y    = 0,
+      xend = LD1,
+      yend = LD2
+    ),
+    linewidth = 3/.pt,
+    arrow     = arrow(length=unit(0.3, "cm")),
+    color     = "gray30"
+  )+
+
+  # Bottom-left quadrant vector labels
+  geom_label_repel(
+    data =
+      filter(
+        Scores,
+        LD1 < 0,
+        LD2 <= 0
+      ),
+    aes(
+      x     = LD1,
+      y     = LD2,
+      label = Label,
+    ),
+    direction          = "y",
+    fill               = alpha(c("white"), 0.8),
+    min.segment.length = 0,
+    segment.linetype   = "dotted",
+    size               = lbl_size,
+    label.padding      = lbl_pdng,
+    force              = lbl_frce,
+    force_pull         = lbl_pull,
+    max.overlaps       = lbl_ovlp,
+    parse              = parse_tgl,
+    # xlim               = c(NA,
+    #                        -(filter(Scores, LD1 < 0) %>%
+    #                        select(LD1) %>%
+    #                        max(abs(.)) + 0.5)
+    #                      ),
+    xlim               = c(NA, lbl_xlim),
+    ylim               = c(-2.0, -lbl_ylim),
+  )+
+
+  # Top-left quadrant vector labels
+  geom_label_repel(
+    data =
+      filter(
+        Scores,
+        LD1 < 0,
+        LD2 > 0
+      ),
+    aes(
+      x     = LD1,
+      y     = LD2,
+      label = Label
+    ),
+    direction          = "y",
+    fill               = alpha(c("white"), 0.8),
+    min.segment.length = 0,
+    segment.linetype   = "dotted",
+    size               = lbl_size,
+    label.padding      = lbl_pdng,
+    force              = lbl_frce,
+    force_pull         = lbl_pull,
+    max.overlaps       = lbl_ovlp,
+    parse              = parse_tgl,
+    # xlim               = c(NA,
+    #                        -(filter(Scores, LD1 < 0) %>%
+    #                        select(LD1) %>%
+    #                        max(abs(.)) + 0.5)
+    #                      ),
+    xlim               = c(NA, lbl_xlim),
+    ylim               = c(lbl_ylim, 2.0),
+  )+
+  
+  # Bottom-right quadrant vector labels
+  geom_label_repel(
+    data =
+      filter(
+        Scores,
+        LD1 > 0,
+        LD2 <= 0
+      ),
+    aes(
+      x     = LD1,
+      y     = LD2,
+      label = Label
+    ),
+    direction          = "y",
+    fill               = alpha(c("white"), 0.8),
+    min.segment.length = 0,
+    segment.linetype   = "dotted",
+    size               = lbl_size,
+    label.padding      = lbl_pdng,
+    force              = lbl_frce,
+    force_pull         = lbl_pull,
+    max.overlaps       = lbl_ovlp,
+    parse              = parse_tgl,
+    # xlim               = c(filter(Scores, LD1 > 0) %>%
+    #                        select(LD1) %>%
+    #                        max(abs(.)) + 0.5,
+    #                      NA),
+    xlim               = c(lbl_xlim, NA),
+    ylim               = c(-2.0, -lbl_ylim),
+  )+
+  
+  # Top-right quadrant vector labels
+  geom_label_repel(
+    data =
+      filter(
+        Scores,
+        LD1 > 0,
+        LD2 > 0
+      ),
+    aes(
+      x     = LD1,
+      y     = LD2,
+      label = Label
+    ),
+    direction          = "y",
+    fill               = alpha(c("white"), 0.8),
+    min.segment.length = 0,
+    segment.linetype   = "dotted",
+    size               = lbl_size,
+    label.padding      = lbl_pdng,
+    force              = lbl_frce,
+    force_pull         = lbl_pull,
+    max.overlaps       = lbl_ovlp,
+    parse              = parse_tgl,
+    # xlim               = c(filter(Scores, LD1 > 0) %>%
+    #                        select(LD1) %>%
+    #                        max(abs(.)) + 0.5,
+    #                      NA),
+    xlim               = c(lbl_xlim, NA),
+    ylim               = c(lbl_ylim, 2.0),
+  )+
+
+  scale_color_manual(
+    values = ColorScheme,
+    guide  = "none"
+  )+
+  scale_shape_manual(
+    values = c(17,15)
+  )+
+  scale_x_continuous(
+    labels = number_format(accuracy = 0.1)
+  )+
+  scale_y_continuous(
+    labels = number_format(accuracy = 0.1),
+    limit  = c(-2.0, 2.0),
+    breaks = seq(-2.0, 2.0, 1.0)
+  )
+}
+```
+
+## Composition and abundance analyses
+
+### Density CAP (shallow)
+
+```{r CAP - Density Inshore}
+# CAP
+CAP_Type.In <- 
+  CAPdiscrim(
+    Dens_Biot.In.BCsq ~ Type, 
+    data         = Dens_Env.In,
+    permutations = 0, 
+    mmax         = m.max
+  )
+
+  # Overall classification success (m=9): 93.3774834437086 percent (2023-11-27)
+  # Artificial (n=75) correct: 92 percent
+  # Natural (n=76) correct: 94.7368421052632 percent
+
+# Percent of the total variance explained by the axes used to describe the CAP
+# model (e.g., 0.15 of the TOTAL VARIANCE)
+CAP_Type.In.PctVar  <- 
+  sum(diag(CAP_Type.In$manova$SS$`y[, group]`)) / CAP_Type.In$tot
+
+# Percent of total variance explained by the CAP model that is explained by EACH
+# CA. (e.g., 0.12 of the 0.15 of the TOTAL VARIANCE from above)
+CAP_Type.In.VarExp <- 
+  cap_pctvars(CAP_Type.In)
+# CA-II explains NO between group variance w/ 2 groups
+CAP_Type.In.VarExp[2] <- 0
+
+# Depending on number of axes selected for CAP, LD2 (e.g., y-coordinates) are
+# not calculated for either the SITES or SPECIES scores. Since the y-axis is a
+# jittered axis, this block provides random values for LD2 when not estimated by
+# CAP, thus allowing for consistent 2-D visualization across all CAP plots.
+
+  ## Adds LD2 is not present in the dataframe.
+if ("LD2" %!in% colnames(CAP_Type.In$x)) {
+  CAP_Type.In$x <- 
+    as.data.frame(
+      CAP_Type.In$x
+    ) %>%
+    add_column(
+      LD2 = runif(nrow(CAP_Type.In$x), -1.25, 1.25)
+    )
+  ## Adjust LD2 to jittered values if present in the dataframe. 
+} else {
+  CAP_Type.In$x <- 
+    as.data.frame(
+      CAP_Type.In$x
+    ) %>%
+    mutate(
+      LD2 = runif(nrow(CAP_Type.In$x), -1.25, 1.25)
+    )
+}
+
+# Indicator value assessment
+Dens_Biot.In.IndVal <- 
+  indval(
+    x          = Dens_Biot.In^(1/4), 
+    clustering = Dens_Env.In$Type, 
+    numitr     = 10000
+  )
+
+Dens_Biot.In.IV_table <- 
+  data.frame(
+    indVal  = Dens_Biot.In.IndVal$indcls,
+    group   = Dens_Biot.In.IndVal$maxcls,
+    p       = Dens_Biot.In.IndVal$pval,
+    p.adj   = p.adjust(Dens_Biot.In.IndVal$pval, method = "holm")
+  ) %>%
+  filter(
+    p.adj < 0.05
+  ) %>%
+  mutate(
+    SpCode = rownames(.),
+    Type   = 
+      case_when(
+        group == 1 ~ "Artificial",
+        group == 2 ~ "Natural"
+      )
+  ) %>%
+  select(
+    -group
+  ) %>%
+  left_join(
+    rownames_to_column(
+      Dens_Biot.In.IndVal$relabu,
+      "SpCode"
+    ) %>%
+    pivot_longer(
+      cols      = -SpCode,
+      names_to  = "Type",
+      values_to = "Specificity"
+    ),
+    by = c("SpCode", "Type")
+  ) %>%
+  left_join(
+    rownames_to_column(
+      Dens_Biot.In.IndVal$relfrq,
+      "SpCode"
+    ) %>%
+    pivot_longer(
+      cols      = -SpCode,
+      names_to  = "Type",
+      values_to = "Fidelity"
+    ),
+    by = c("SpCode", "Type")
+  ) %>%
+  merge(
+    select(
+      Taxa_table,
+      c("SpCode", "SpName", "Common")
+    ), 
+    by = "SpCode"
+  ) %>%
+  merge(
+    select(
+      Species_UniqNo,
+      c(SpCode, Number)
+    )
+  ) %>%
+  arrange(
+    Type, 
+    desc(indVal)
+  ) 
+  
+Dens_Biot.In.IV_Export <- 
+  relocate(
+    Dens_Biot.In.IV_table,
+    SpName,
+    Common, 
+    Type, 
+    .before = SpCode) %>%
+  rename(
+    "Indicator value" = indVal,
+    "Reef type"       = Type,
+    "Genus species"   = SpName,
+    "ID"              = Number
+  ) %>%
+  select(
+    -SpCode
+  ) %>%
+  relocate(
+    ID,
+    .before = "Genus species"
+  ) %>%
+  mutate(
+    `Indicator value` = format(round(`Indicator value`, 2), nsmall = 2),
+    p = format(round(p, 4), nsmall = 4)
+  )
+
+write.csv(Dens_Biot.In.IV_Export, "Dens_Biot_In_IV_ALL.csv")
+
+Dens_Biot.In.IV_Only <- 
+  select(
+    Dens_Biot.In, 
+    Dens_Biot.In.IV_table$SpCode
+  )
+
+# Add species scores
+CAP_Type.In <- 
+  add.spec.scores(
+    CAP_Type.In, 
+    Dens_Biot.In.IV_Only^(1/4), 
+    # Vector scaling factor
+    multi = 5
+  )      
+
+# Extract Species and Site Scores
+CAP_Type.In.spc <- 
+  as.data.frame(
+    CAP_Type.In$cproj
+  ) %>%
+  mutate(
+    SpCode = rownames(.),
+    LD1_sign = sign(LD1)
+  ) %>%
+  mutate(
+    LD2 = sample(seq(-1.5, 1.5, length = n())),
+    .by = LD1_sign
+  ) %>%
+  merge(
+    select(
+      Taxa_table,
+      SpCode:Family
+    ),
+    by = "SpCode"
+  ) %>%
+  merge(
+    select(
+      Species_UniqNo,
+      c(SpCode, Number)
+    ),
+    by = "SpCode"
+  )
+
+CAP_Type.In.dat <- 
+  as.data.frame(
+    CAP_Type.In$x
+  ) %>%
+  bind_cols(
+    Dens_Env.In
+  )
+```
+
+#### Density plot (shallow)
+
+```{r}
+(Plot_DensShal <- 
+  Plot_Template(
+    Form    = "Comp",
+    Site    = CAP_Type.In.dat,
+    Scores  = CAP_Type.In.spc,
+    VarExp  = CAP_Type.In.VarExp,
+    PctVar  = CAP_Type.In.PctVar,
+    Depth   = "Shallow",
+    Title   = "Shallow reefs"
+  )
+)
+```
+
+
+### Density CAP (deep)
+
+```{r CAP - Density Offshore}
+# CAP
+CAP_Type.Off <- 
+  CAPdiscrim(
+    Dens_Biot.Off.BCsq ~ Type,
+    data         = Dens_Env.Off,
+    permutations = 0,
+    mmax         = m.max
+  )
+  
+  # Overall classification success (m=14): 98.6486486486486 percent (2023-11-27)
+  # Artificial (n=74) correct: 98.6486486486486 percent
+  # Natural (n=74) correct: 98.6486486486486 percent
+
+# Percent of the total variance explained by the axes used to describe the CAP
+# model (e.g., 0.15 of the TOTAL VARIANCE)
+CAP_Type.Off.PctVar <- 
+  sum(diag(CAP_Type.Off$manova$SS$`y[, group]`)) / CAP_Type.Off$tot
+
+# Percent of total variance explained by the CAP model explained by EACH CA.
+# (e.g., 0.12 of the 0.15 of the TOTAL VARIANCE from above)
+CAP_Type.Off.VarExp <- 
+  cap_pctvars(
+    CAP_Type.Off
+  )
+# CA-II explains NO between group variance w/ 2 groups
+CAP_Type.Off.VarExp[2] <- 0
+
+# Depending on number of axes selected for CAP, LD2 (e.g., y-coordinates) are
+# not calculated for either the SITES or SPECIES scores. Since the y-axis is a
+# jittered axis, this block provides random values for LD2 when not estimated by
+# CAP, thus allowing for consistent 2-D visualization across all CAP plots.
+if ("LD2" %!in% colnames(CAP_Type.Off$x)) {
+  CAP_Type.Off$x <- 
+    as.data.frame(
+      CAP_Type.Off$x
+    ) %>%
+    add_column(
+      LD2 = runif(nrow(CAP_Type.Off$x), -1.25, 1.25)
+    )
+} else {
+  CAP_Type.Off$x <- 
+    as.data.frame(
+      CAP_Type.Off$x
+    ) %>%
+    mutate(
+      LD2 = runif(nrow(CAP_Type.Off$x), -1.25, 1.25)
+    )
+}
+
+# Indicator value assessment
+Dens_Biot.Off.IndVal <- 
+  indval(
+    x           = Dens_Biot.Off^(1/4), 
+    clustering  = Dens_Env.Off$Type, 
+    numitr      = 10000
+  )
+
+RelAbu <- 
+  rownames_to_column(
+    Dens_Biot.Off.IndVal$relabu,
+    "SpCode"
+  )
+
+RelFrq <- 
+  rownames_to_column(
+    Dens_Biot.Off.IndVal$relabu,
+    "SpCode"
+  )
+
+Dens_Biot.Off.IV_table <- 
+  data.frame(
+    indVal  = Dens_Biot.Off.IndVal$indcls,
+    group   = Dens_Biot.Off.IndVal$maxcls,
+    p       = Dens_Biot.Off.IndVal$pval,
+    p.adj   = p.adjust(Dens_Biot.Off.IndVal$pval, method = "holm")
+  ) %>%
+  filter(
+    p.adj < 0.05
+  ) %>%
+  mutate(
+    SpCode = rownames(.),
+    Type   = 
+      case_when(
+        group == 1 ~ "Artificial",
+        group == 2 ~ "Natural"
+      )
+  ) %>%
+  select(
+    -group
+  ) %>%
+  left_join(
+    rownames_to_column(
+      Dens_Biot.Off.IndVal$relabu,
+      "SpCode"
+    ) %>%
+    pivot_longer(
+      cols      = -SpCode,
+      names_to  = "Type",
+      values_to = "Specificity"
+    ),
+    by = c("SpCode", "Type")
+  ) %>%
+  left_join(
+    rownames_to_column(
+      Dens_Biot.Off.IndVal$relfrq,
+      "SpCode"
+    ) %>%
+    pivot_longer(
+      cols      = -SpCode,
+      names_to  = "Type",
+      values_to = "Fidelity"
+    ),
+    by = c("SpCode", "Type")
+  ) %>%
+  merge(
+    select(
+      Taxa_table,
+      c("SpCode", "SpName", "Common")
+    ), 
+    by = "SpCode"
+  ) %>%
+  merge(
+    select(
+      Species_UniqNo,
+      c(SpCode, Number)
+    )
+  ) %>%
+  arrange(
+    Type, 
+    desc(indVal)
+  )
+
+
+Dens_Biot.Off.IV_Export <- 
+  relocate(
+    Dens_Biot.Off.IV_table,
+    SpName,
+    Common, 
+    Type, 
+    .before = SpCode) %>%
+  rename(
+    "Indicator value" = indVal,
+    "Reef type"       = Type,
+    "Genus species"   = SpName,
+    "ID"              = Number
+  ) %>%
+  select(
+    -SpCode
+  ) %>%
+  relocate(
+    ID,
+    .before = "Genus species"
+  ) %>%
+  mutate(
+    `Indicator value` = format(round(`Indicator value`, 2), nsmall = 2),
+    p = format(round(p, 4), nsmall = 4)
+  )
+
+write.csv(Dens_Biot.Off.IV_Export, "Dens_Biot_Off_IV_ALL.csv")
+
+Dens_Biot.Off.IV_Only <- 
+  select(
+    Dens_Biot.Off, 
+    Dens_Biot.Off.IV_table$SpCode
+  )
+
+# Add species scores
+CAP_Type.Off <- 
+  add.spec.scores(
+    CAP_Type.Off, 
+    Dens_Biot.Off.IV_Only^(1/4), 
+    # Vector scaling factor
+    multi = 6.5
+  )      
+
+# Extract Species and Site Scores
+CAP_Type.Off.spc <- 
+  as.data.frame(
+    CAP_Type.Off$cproj
+  ) %>%
+  mutate(
+    SpCode = rownames(.),
+    LD1_sign = sign(LD1)
+  ) %>%
+  mutate(
+    LD2 = sample(seq(-1.5, 1.5, length = n())),
+    .by = LD1_sign
+  ) %>%
+  merge(
+    select(
+      Taxa_table,
+      SpCode:Family
+    ),
+    by = "SpCode"
+  ) %>%
+  merge(
+    select(
+      Species_UniqNo,
+      c(SpCode, Number)
+    ),
+    by = "SpCode"
+  )
+
+
+CAP_Type.Off.dat <- 
+  as.data.frame(
+    CAP_Type.Off$x
+  ) %>%
+  bind_cols(
+    Dens_Env.Off
+  )
+```
+
+#### Density plot (deep)
+
+```{r}
+(Plot_DensDeep <- 
+  Plot_Template(
+    Form    = "Comp",
+    Site    = CAP_Type.Off.dat,
+    Scores  = CAP_Type.Off.spc,
+    VarExp  = CAP_Type.Off.VarExp,
+    PctVar  = CAP_Type.Off.PctVar,
+    Depth   = "Deep",
+    Title   = "Deep reefs"
+  )
+)
+```
+
+### Multipanel Composition and Abundance plot
+```{r}
+(Plot_Dens_Combo <- 
+  Plot_DensShal/Plot_DensDeep +
+  plot_annotation(
+    title      = "Composition and abundance",
+    tag_levels = "a",
+    tag_suffix = ")"
+  ) +
+  plot_layout(
+    guides = "collect",
+    # Adjusts the relative height of each plot such that more vertical space is
+    # provided for the trait plot for the spread of the labels
+    # heights = (c(1,1.5))
+  ) &
+  theme(
+    plot.tag.position = c(0.02,0.985),
+    plot.tag          = element_text(size = 32/.pt, face = "bold"),
+    plot.title        = element_text(size = 32/.pt, face = "bold"),
+    legend.position   = "bottom"
+  )
+)
+```
+
+## Trait-based analyses
+
+### Density-weighted traits CAP (shallow)
+
+```{r PERMANOVA & CAP - Trait Richness Inshore}
+
+# CAP Plot
+CAP_TrtD_Type.In <- 
+  CAPdiscrim(
+    TrtDens_Biot.In.BC ~ Type, 
+    data         = TrtDens_Env.In,
+    permutations = 0,
+    mmax         = m.max,
+    add          = FALSE
+  )
+  # Overall classification success (m=8) : 78.8079470198676 percent (2023-07-21)
+  # Artificial (n=75) correct: 80 percent
+  # Natural (n=76) correct: 77.6315789473684 percent
+
+# Percent of the total variance explained by the axes used to describe the CAP
+# model (e.g., 0.15 of the TOTAL VARIANCE)
+CAP_TrtD_Type.In.PctVar <- 
+  sum(diag(CAP_TrtD_Type.In$manova$SS$`y[, group]`)) / CAP_TrtD_Type.In$tot
+
+# Percent of total variance explained by the CAP model explained by EACH CA.
+# (e.g., 0.12 of the 0.15 of the TOTAL VARIANCE from above)
+CAP_TrtD_Type.In.VarExp <- 
+  cap_pctvars(
+    CAP_TrtD_Type.In
+  )
+# CA-II explains NO between group variance w/ 2 groups
+CAP_TrtD_Type.In.VarExp[2] <- 0
+
+# Depending on number of axes selected for CAP, LD2 (e.g., y-coordinates) are
+# not calculated for either the SITES or SPECIES scores. Since the y-axis is a
+# jittered axis, this block provides random values for LD2 when not estimated by
+# CAP, thus allowing for consistent 2-D visualization across all CAP plots.
+if ("LD2" %!in% colnames(CAP_TrtD_Type.In$x)) {
+  CAP_TrtD_Type.In$x <- 
+    as.data.frame(
+      CAP_TrtD_Type.In$x
+    ) %>%
+    add_column(
+      LD2 = runif(nrow(CAP_TrtD_Type.In$x), -1.25, 1.25)
+    )
+} else {
+  CAP_TrtD_Type.In$x <- 
+    as.data.frame(
+      CAP_TrtD_Type.In$x
+    ) %>%
+    mutate(
+      LD2 = runif(nrow(CAP_TrtD_Type.In$x), -1.25, 1.25)
+    )
+}
+
+# Add trait scores
+CAP_TrtD_Type.In <- 
+  add.spec.scores(
+    CAP_TrtD_Type.In, 
+    TrtDens_Biot.In,
+    # Vector scaling factor
+    multi = 4.0
+  )      
+
+# Extract Species and Site Scores
+CAP_TrtD_Type.In.spc <- 
+  as.data.frame(
+    CAP_TrtD_Type.In$cproj
+  ) %>%
+  mutate(
+    Trait = rownames(.),
+    LD1_sign = sign(LD1)
+  ) %>%
+  mutate(
+    LD2 = sample(seq(-1.5, 1.5, length = n())),
+    .by = LD1_sign
+  )
+
+CAP_TrtD_Type.In.dat <- 
+  as.data.frame(
+    CAP_TrtD_Type.In$x
+  ) %>%
+  bind_cols(
+    TrtDens_Env.In
+  )
+
+
+# Correct strings for plotting purposes (otherwise ERROR)
+CAP_TrtD_Type.In.spc$Trait <- 
+  gsub(
+    " ", 
+    "~", 
+    CAP_TrtD_Type.In.spc$Trait
+  )
+```
+
+#### Density-weighted traits plot (shallow)
+
+```{r}
+(Plot_TrtDShal <- 
+  Plot_Template(
+    Form    = "Trait", 
+    Site    = CAP_TrtD_Type.In.dat,
+    Scores  = CAP_TrtD_Type.In.spc,
+    VarExp  = CAP_TrtD_Type.In.VarExp,
+    PctVar  = CAP_TrtD_Type.In.PctVar,
+    Depth   = "Shallow",
+    Title   = "Shallow reefs"
+  )
+)
+```
+
+### Density-weighted traits CAP (deep)
+
+```{r PERMANOVA & CAP - Trait Richness Offshore}
+
+# CAP Plot
+CAP_TrtD_Type.Off <- 
+  CAPdiscrim(
+    TrtDens_Biot.Off.BC ~ Type, 
+    data         = TrtDens_Env.Off,
+    permutations = 0, 
+    mmax         = m.max,
+    add          = FALSE
+  )
+  # Overall classification success (m=14): 92.5675675675676 percent (2023-11-27)
+  # Artificial (n=74) correct: 94.5945945945946 percent
+  # Natural (n=74) correct: 90.5405405405405 percent
+
+# Percent of the total variance explained by the axes used to describe the CAP
+# model (e.g., 0.15 of the TOTAL VARIANCE)
+CAP_TrtD_Type.Off.PctVar <- 
+  sum(diag(CAP_TrtD_Type.Off$manova$SS$`y[, group]`)) / CAP_TrtD_Type.Off$tot
+
+# Percent of total variance explained by the CAP model explained by EACH CA.
+# (e.g., 0.12 of the 0.15 of the TOTAL VARIANCE from above)
+CAP_TrtD_Type.Off.VarExp <- 
+  cap_pctvars(CAP_TrtD_Type.Off)
+# CA-II explains NO between group variance w/ 2 groups
+CAP_TrtD_Type.Off.VarExp[2] <- 0
+
+
+# Depending on number of axes selected for CAP, LD2 (e.g., y-coordinates) are
+# not calculated for either the SITES or SPECIES scores. Since the y-axis is a
+# jittered axis, this block provides random values for LD2 when not estimated by
+# CAP, thus allowing for consistent 2-D visualization across all CAP plots.
+if ("LD2" %!in% colnames(CAP_TrtD_Type.Off$x)) {
+  CAP_TrtD_Type.Off$x <- 
+    as.data.frame(
+      CAP_TrtD_Type.Off$x
+    ) %>%
+    add_column(
+      LD2 = runif(nrow(CAP_TrtD_Type.Off$x), -1.25, 1.25)
+    )
+} else {
+  CAP_TrtD_Type.Off$x <- 
+    as.data.frame(
+      CAP_TrtD_Type.Off$x
+    ) %>%
+    mutate(
+      LD2 = runif(nrow(CAP_TrtD_Type.Off$x), -1.25, 1.25)
+    )
+}
+
+
+# Add trait scores
+CAP_TrtD_Type.Off <- 
+  add.spec.scores(
+    CAP_TrtD_Type.Off, 
+    TrtDens_Biot.Off,
+    # Vector scaling factor
+    multi = 5
+  )      
+
+# Extract Species and Site Scores
+CAP_TrtD_Type.Off.spc <- 
+  as.data.frame(
+    CAP_TrtD_Type.Off$cproj
+  ) %>%
+  mutate(
+    Trait = rownames(.),
+    LD1_sign = sign(LD1)
+  ) %>%
+  mutate(
+    LD2 = sample(seq(-1.5, 1.5, length = n())),
+    .by = LD1_sign
+  )
+
+
+CAP_TrtD_Type.Off.dat <- 
+  as.data.frame(
+    CAP_TrtD_Type.Off$x
+  ) %>%
+  bind_cols(
+    TrtDens_Env.Off
+  )
+
+# Correct strings for plotting purposes (otherwise ERROR)
+CAP_TrtD_Type.Off.spc$Trait <- 
+  gsub(
+    " ", 
+    "~", 
+    CAP_TrtD_Type.Off.spc$Trait
+  )
+```
+
+#### Density-weighted traits plot (deep)
+
+```{r}
+(Plot_TrtDDeep <- 
+  Plot_Template(
+    Form    = "Trait", 
+    Site    = CAP_TrtD_Type.Off.dat,
+    Scores  = CAP_TrtD_Type.Off.spc,
+    VarExp  = CAP_TrtD_Type.Off.VarExp,
+    PctVar  = CAP_TrtD_Type.Off.PctVar,
+    Depth   = "Deep",
+    Title   = "Deep reefs"
+  )
+)
+```
+
+### Multipanel Trait-based plot
+
+```{r Multipanel density-weight trait plot}
+(Plot_TrtDens_Combo <- 
+  Plot_TrtDShal/Plot_TrtDDeep +
+  plot_annotation(
+    title      = "Trait-based functional diversity",
+    tag_levels = "a",
+    tag_suffix = ")"
+  ) +
+  plot_layout(
+    guides = "collect",
+    # heights = c(1,1.5)
+  ) &
+  theme(
+    plot.tag.position = c(0.02,0.985),
+    plot.tag          = element_text(size = 32/.pt, face = "bold"),
+    plot.title        = element_text(size = 32/.pt, face = "bold"),
+    legend.position   = "bottom"
+  )
+)
+```
